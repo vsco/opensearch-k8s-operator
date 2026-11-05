@@ -1466,6 +1466,74 @@ var _ = Describe("Builders", func() {
 		})
 	})
 
+	When("building the load-balanced Service of a node pool", func() {
+		newCluster := func() opensearchv1.OpenSearchCluster {
+			return opensearchv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "opensearch", Namespace: "ns", UID: "dummyuid"},
+				Spec: opensearchv1.ClusterSpec{
+					General: opensearchv1.GeneralConfig{
+						ServiceName: "opensearch",
+						HttpPort:    9200,
+						Annotations: map[string]string{"general": "g", "shared": "general"},
+					},
+				},
+			}
+		}
+
+		It("should select only the pods of that node pool and expose the HTTP port", func() {
+			cluster := newCluster()
+			nodePool := opensearchv1.NodePool{
+				Component: "coordinators",
+				Service:   &opensearchv1.NodePoolServiceSpec{},
+			}
+			result := NewServiceForNodePool(&cluster, &nodePool)
+			Expect(result.Name).To(Equal("opensearch-coordinators-http"))
+			Expect(result.Namespace).To(Equal("ns"))
+			Expect(result.Spec.Selector).To(Equal(map[string]string{
+				helpers.ClusterLabel:  "opensearch",
+				helpers.NodePoolLabel: "coordinators",
+			}))
+			Expect(result.Spec.ClusterIP).NotTo(Equal(corev1.ClusterIPNone))
+			Expect(result.Spec.Ports).To(HaveLen(1))
+			Expect(result.Spec.Ports[0].Name).To(Equal("http"))
+			Expect(result.Spec.Ports[0].Port).To(Equal(int32(9200)))
+		})
+
+		It("should apply type, source ranges and merge annotations with the service winning", func() {
+			cluster := newCluster()
+			nodePool := opensearchv1.NodePool{
+				Component:   "coordinators",
+				Annotations: map[string]string{"pool": "p", "shared": "pool"},
+				Service: &opensearchv1.NodePoolServiceSpec{
+					Type:                     corev1.ServiceTypeLoadBalancer,
+					LoadBalancerSourceRanges: []string{"10.0.0.0/8"},
+					Annotations:              map[string]string{"svc": "s", "shared": "service"},
+				},
+			}
+			result := NewServiceForNodePool(&cluster, &nodePool)
+			Expect(result.Spec.Type).To(Equal(corev1.ServiceTypeLoadBalancer))
+			Expect(result.Spec.LoadBalancerSourceRanges).To(Equal([]string{"10.0.0.0/8"}))
+			Expect(result.Annotations).To(Equal(map[string]string{
+				"general": "g",
+				"pool":    "p",
+				"svc":     "s",
+				"shared":  "service",
+			}))
+		})
+
+		It("should work for any node pool, not only coordinating ones", func() {
+			cluster := newCluster()
+			nodePool := opensearchv1.NodePool{
+				Component: "data",
+				Roles:     []string{"data"},
+				Service:   &opensearchv1.NodePoolServiceSpec{},
+			}
+			result := NewServiceForNodePool(&cluster, &nodePool)
+			Expect(result.Name).To(Equal("opensearch-data-http"))
+			Expect(result.Spec.Selector[helpers.NodePoolLabel]).To(Equal("data"))
+		})
+	})
+
 	When("Using custom probe timeouts and thresholds for OpenSearch startup", func() {
 		It("should have default probes timeouts and thresholds", func() {
 			clusterObject := ClusterDescWithVersion("2.7.0")

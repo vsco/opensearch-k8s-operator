@@ -106,6 +106,30 @@ func (r *ClusterReconciler) canManageClusterRoleBindings() bool {
 // ServiceMonitor. A missing ServiceMonitor CRD is tolerated in both
 // directions so that it never blocks the rest of the reconcile chain
 // (e.g. the dashboards deployment, see #746).
+// reconcileNodePoolService keeps the optional load-balanced Service of a node pool in sync with
+// nodePool.Service. When the setting is removed the Service is deleted, but only if this cluster
+// created it, so an unrelated Service that happens to share the name is never touched.
+func (r *ClusterReconciler) reconcileNodePoolService(result *reconciler.CombinedResult, nodePool *opensearchv1.NodePool) {
+	service := builders.NewServiceForNodePool(r.instance, nodePool)
+	if nodePool.Service != nil {
+		result.CombineErr(ctrl.SetControllerReference(r.instance, service, r.client.Scheme()))
+		result.Combine(r.client.ReconcileResource(service, reconciler.StatePresent))
+		return
+	}
+
+	existing, err := r.client.GetService(service.Name, service.Namespace)
+	if k8serrors.IsNotFound(err) {
+		return
+	}
+	if err != nil {
+		result.CombineErr(err)
+		return
+	}
+	if metav1.IsControlledBy(&existing, r.instance) {
+		result.Combine(r.client.ReconcileResource(service, reconciler.StateAbsent))
+	}
+}
+
 func (r *ClusterReconciler) reconcileServiceMonitor(result *reconciler.CombinedResult) {
 	serviceMonitor := builders.NewServiceMonitor(r.instance)
 	if r.instance.Spec.General.Monitoring.Enable {
@@ -199,6 +223,8 @@ func (r *ClusterReconciler) Reconcile() (ctrl.Result, error) {
 		headlessService := builders.NewHeadlessServiceForNodePool(r.instance, &nodePool)
 		result.CombineErr(ctrl.SetControllerReference(r.instance, headlessService, r.client.Scheme()))
 		result.Combine(r.client.ReconcileResource(headlessService, reconciler.StatePresent))
+
+		r.reconcileNodePoolService(&result, &nodePool)
 
 		result.Combine(r.reconcileNodeStatefulSet(nodePool, username))
 	}

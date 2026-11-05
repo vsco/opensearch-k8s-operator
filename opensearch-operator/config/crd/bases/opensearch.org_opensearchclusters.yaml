@@ -7023,6 +7023,37 @@ spec:
                       items:
                         type: string
                       type: array
+                    service:
+                      description: |-
+                        Service creates an additional, load-balanced Service for this node pool's HTTP port,
+                        named "<general.serviceName>-<component>-http". The per-pool headless Service only
+                        provides DNS records for the individual pods, and general.serviceName selects every
+                        pool, so this is the way to give clients a single endpoint that spreads requests
+                        across just this pool (for example a pool with no roles, which acts as coordinating-only
+                        nodes). Leave unset to not create the Service; removing it deletes the Service again.
+                      properties:
+                        annotations:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Annotations added to the Service, for example to select an internal cloud load balancer.
+                            They are merged over general.annotations and the node pool's annotations.
+                          type: object
+                        loadBalancerSourceRanges:
+                          description: LoadBalancerSourceRanges restricts the client
+                            CIDRs allowed through a Service of type LoadBalancer.
+                          items:
+                            type: string
+                          type: array
+                        type:
+                          default: ClusterIP
+                          description: Type of the Service. Defaults to ClusterIP.
+                          enum:
+                          - ClusterIP
+                          - NodePort
+                          - LoadBalancer
+                          type: string
+                      type: object
                     sidecarContainers:
                       x-kubernetes-preserve-unknown-fields: true
                     tolerations:
