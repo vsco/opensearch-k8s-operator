@@ -603,6 +603,95 @@ var _ = Describe("ServiceMonitor reconciliation", func() {
 	})
 })
 
+var _ = Describe("Node pool Service reconciliation", func() {
+	newInstance := func() *opensearchv1.OpenSearchCluster {
+		return &opensearchv1.OpenSearchCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "os", Namespace: "ns", UID: "cluster-uid"},
+			Spec: opensearchv1.ClusterSpec{
+				General: opensearchv1.GeneralConfig{ServiceName: "os", HttpPort: 9200},
+			},
+		}
+	}
+	serviceName := "os-coordinators-http"
+	notFound := k8serrors.NewNotFound(schema.GroupResource{Resource: "services"}, serviceName)
+
+	It("should create the Service owned by the cluster when the node pool sets service", func() {
+		mockClient := k8s.NewMockK8sClient(GinkgoT())
+		underTest := &ClusterReconciler{client: mockClient, instance: newInstance(), recorder: record.NewFakeRecorder(1)}
+		nodePool := opensearchv1.NodePool{Component: "coordinators", Service: &opensearchv1.NodePoolServiceSpec{}}
+
+		mockClient.EXPECT().Scheme().Return(scheme.Scheme)
+		mockClient.EXPECT().
+			ReconcileResource(mock.MatchedBy(func(svc *corev1.Service) bool {
+				return svc.Name == serviceName &&
+					metav1.IsControlledBy(svc, underTest.instance)
+			}), reconciler.StatePresent).
+			Return(nil, nil)
+
+		result := reconciler.CombinedResult{}
+		underTest.reconcileNodePoolService(&result, &nodePool)
+		Expect(result.Err).NotTo(HaveOccurred())
+	})
+
+	It("should do nothing when the node pool has no service and none exists", func() {
+		mockClient := k8s.NewMockK8sClient(GinkgoT())
+		underTest := &ClusterReconciler{client: mockClient, instance: newInstance(), recorder: record.NewFakeRecorder(1)}
+		nodePool := opensearchv1.NodePool{Component: "coordinators"}
+
+		mockClient.EXPECT().GetService(serviceName, "ns").Return(corev1.Service{}, notFound)
+
+		result := reconciler.CombinedResult{}
+		underTest.reconcileNodePoolService(&result, &nodePool)
+		Expect(result.Err).NotTo(HaveOccurred())
+	})
+
+	It("should delete the Service once service is removed from the node pool", func() {
+		mockClient := k8s.NewMockK8sClient(GinkgoT())
+		instance := newInstance()
+		underTest := &ClusterReconciler{client: mockClient, instance: instance, recorder: record.NewFakeRecorder(1)}
+		nodePool := opensearchv1.NodePool{Component: "coordinators"}
+		existing := corev1.Service{ObjectMeta: metav1.ObjectMeta{
+			Name: serviceName, Namespace: "ns",
+			OwnerReferences: []metav1.OwnerReference{{UID: instance.UID, Controller: ptr.To(true)}},
+		}}
+
+		mockClient.EXPECT().GetService(serviceName, "ns").Return(existing, nil)
+		mockClient.EXPECT().
+			ReconcileResource(mock.MatchedBy(func(svc *corev1.Service) bool { return svc.Name == serviceName }), reconciler.StateAbsent).
+			Return(nil, nil)
+
+		result := reconciler.CombinedResult{}
+		underTest.reconcileNodePoolService(&result, &nodePool)
+		Expect(result.Err).NotTo(HaveOccurred())
+	})
+
+	It("should leave a same-named Service alone when the cluster does not own it", func() {
+		mockClient := k8s.NewMockK8sClient(GinkgoT())
+		underTest := &ClusterReconciler{client: mockClient, instance: newInstance(), recorder: record.NewFakeRecorder(1)}
+		nodePool := opensearchv1.NodePool{Component: "coordinators"}
+		foreign := corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: "ns"}}
+
+		// No ReconcileResource expectation: the mock fails the test if a delete is attempted.
+		mockClient.EXPECT().GetService(serviceName, "ns").Return(foreign, nil)
+
+		result := reconciler.CombinedResult{}
+		underTest.reconcileNodePoolService(&result, &nodePool)
+		Expect(result.Err).NotTo(HaveOccurred())
+	})
+
+	It("should surface errors when looking up the Service", func() {
+		mockClient := k8s.NewMockK8sClient(GinkgoT())
+		underTest := &ClusterReconciler{client: mockClient, instance: newInstance(), recorder: record.NewFakeRecorder(1)}
+		nodePool := opensearchv1.NodePool{Component: "coordinators"}
+
+		mockClient.EXPECT().GetService(serviceName, "ns").Return(corev1.Service{}, errors.New("api down"))
+
+		result := reconciler.CombinedResult{}
+		underTest.reconcileNodePoolService(&result, &nodePool)
+		Expect(result.Err).To(MatchError(ContainSubstring("api down")))
+	})
+})
+
 var _ = Describe("Node attributes RBAC reconciliation", func() {
 	It("should not delete cluster role bindings when cluster-scoped RBAC management is disabled", func() {
 		mockClient := k8s.NewMockK8sClient(GinkgoT())

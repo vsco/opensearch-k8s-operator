@@ -197,12 +197,32 @@ type NodePool struct {
 	Probes                    *ProbesConfig                     `json:"probes,omitempty"`
 	// Extra items to add to the opensearch.yml for this nodepool (merged with general.additionalConfig)
 	AdditionalConfig map[string]string `json:"additionalConfig,omitempty"`
+	// Service creates an additional, load-balanced Service for this node pool's HTTP port,
+	// named "<general.serviceName>-<component>-http". The per-pool headless Service only
+	// provides DNS records for the individual pods, and general.serviceName selects every
+	// pool, so this is the way to give clients a single endpoint that spreads requests
+	// across just this pool (for example a pool with no roles, which acts as coordinating-only
+	// nodes). Leave unset to not create the Service; removing it deletes the Service again.
+	Service *NodePoolServiceSpec `json:"service,omitempty"`
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +kubebuilder:validation:Schemaless
 	SidecarContainers []corev1.Container `json:"sidecarContainers,omitempty"`
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +kubebuilder:validation:Schemaless
 	InitContainers []corev1.Container `json:"initContainers,omitempty"`
+}
+
+// NodePoolServiceSpec configures the load-balanced Service of a single node pool.
+type NodePoolServiceSpec struct {
+	// Type of the Service. Defaults to ClusterIP.
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +kubebuilder:default=ClusterIP
+	Type corev1.ServiceType `json:"type,omitempty"`
+	// LoadBalancerSourceRanges restricts the client CIDRs allowed through a Service of type LoadBalancer.
+	LoadBalancerSourceRanges []string `json:"loadBalancerSourceRanges,omitempty"`
+	// Annotations added to the Service, for example to select an internal cloud load balancer.
+	// They are merged over general.annotations and the node pool's annotations.
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // PersistenceConfig defines options for data persistence

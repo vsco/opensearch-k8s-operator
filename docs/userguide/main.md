@@ -1173,6 +1173,27 @@ spec:
 
 Node pool labels and annotations are added to the pool's StatefulSet and pods. Node pool annotations are also added to the pool's headless Service.
 
+### Load balancing across the nodes of a node pool
+
+The per-pool headless Service only provides DNS records for the individual pods, and `spec.general.serviceName` selects the pods of every node pool. To give clients a single, load-balanced endpoint for just one node pool, set `service` on that node pool. It works on any node pool; a typical use is a pool without roles, whose nodes act as coordinating-only nodes:
+
+```yaml
+spec:
+  nodePools:
+    - component: coordinators
+      replicas: 3
+      diskSize: "5Gi"
+      roles: [] # coordinating-only nodes
+      service:
+        type: LoadBalancer # ClusterIP (default), NodePort or LoadBalancer
+        loadBalancerSourceRanges: # optional, only used by type LoadBalancer
+          - 10.0.0.0/8
+        annotations: # optional, e.g. to request an internal cloud load balancer
+          service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+```
+
+The Operator creates a Service named `<general.serviceName>-<component>-http` (here `my-cluster-coordinators-http`) that exposes the HTTP port and selects only the pods of that node pool. Its annotations are `spec.general.annotations`, then the node pool's `annotations`, then `service.annotations`, with later ones winning. Removing `service` from the node pool deletes the Service again; the Operator only deletes a Service that it created.
+
 ### Add Labels or Annotations to the Dashboard Deployment
 
 You can add labels or annotations to the dashboard pod specification. This is helpful if you want the dashboard to be part of a service mesh or integrate with other applications that rely on labels or annotations.

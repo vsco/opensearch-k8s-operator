@@ -1,0 +1,135 @@
+# =============================================================================
+# VSCO FORK ONLY — REMOVE BEFORE OPENING A PR TO opensearch-project/opensearch-k8s-operator
+#
+# Publishes an operator image built from this fork to:
+#   ghcr.io/vsco/opensearch-operator:<tag>     e.g. 3.0.0-vsco1
+# (same tag pattern as the OpenSearch fork: 3.9.0-vsco1)
+#
+# The image is the whole operator, so the Dockerfile is built as-is from this
+# checkout. There is no base-image jar swap: every change on the branch is in
+# the image. The builder stage cross-compiles, and the runtime stage follows
+# the target platform, so buildx emits a real multi-arch manifest (no QEMU).
+#
+# The tag must start with the chart appVersion (charts/opensearch-operator/Chart.yaml),
+# which is the version the upstream image is tagged with. The chart's own
+# version is the Helm package version and is not part of the image tag.
+#
+# Usage:
+#   Actions → "VSCO (fork) publish OpenSearch operator image to ghcr.io/vsco" → Run workflow
+#
+# Auth: GITHUB_TOKEN usually works for packages:write in the vsco org.
+#       If pushes fail with 403, add repo secret VSCO_GHCR_TOKEN (PAT with
+#       write:packages).
+# =============================================================================
+
+name: VSCO (fork) publish OpenSearch operator image to ghcr.io/vsco
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Tag for ghcr.io/vsco/opensearch-operator (e.g. 3.0.0-vsco1)'
+        required: true
+        default: '3.0.0-vsco1'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_ORG: vsco
+  IMAGE_NAME: opensearch-operator
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  build-push-operator:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io (org vsco packages)
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.VSCO_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Resolve operator version
+        id: version
+        run: |
+          set -euo pipefail
+          # appVersion is the image version (upstream tag). Chart version is the Helm package version.
+          APP_VERSION="$(awk '/^appVersion:/ { print $2; exit }' charts/opensearch-operator/Chart.yaml)"
+          APP_VERSION="${APP_VERSION#\"}"
+          APP_VERSION="${APP_VERSION%\"}"
+          if [[ -z "${APP_VERSION}" ]]; then
+            echo "Could not read appVersion from charts/opensearch-operator/Chart.yaml" >&2
+            exit 1
+          fi
+          echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Operator appVersion ${APP_VERSION}; publishing as ${{ inputs.image_tag }}"
+
+      - name: Validate image tag matches operator version
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.image_tag }}"
+          BASE="${{ steps.version.outputs.app_version }}"
+          case "${TAG}" in
+            "${BASE}-vsco"*) ;;
+            *)
+              echo "image_tag '${TAG}' must start with '${BASE}-vsco' (e.g. ${BASE}-vsco1)" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build and push multi-arch image
+        run: |
+          set -euo pipefail
+          # Dockerfile copies LICENSE from the build context; the file lives at the repo root.
+          cp -f LICENSE opensearch-operator/LICENSE
+          DST="${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+          docker buildx build \
+            --platform "${{ env.PLATFORMS }}" \
+            --provenance=false \
+            --tag "${DST}" \
+            --push \
+            opensearch-operator
+          echo "Pushed ${DST}"
+
+      - name: Verify pushed manifest covers every platform
+        run: |
+          set -euo pipefail
+          DST="${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+          docker buildx imagetools inspect "${DST}"
+          for platform in $(echo "${{ env.PLATFORMS }}" | tr ',' ' '); do
+            if ! docker buildx imagetools inspect "${DST}" | grep -q "${platform}"; then
+              echo "Pushed manifest is missing ${platform}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Summary
+        run: |
+          {
+            echo "## VSCO OpenSearch operator image"
+            echo ""
+            echo "Built from this fork (appVersion \`${{ steps.version.outputs.app_version }}\`)."
+            echo "Platforms: \`${{ env.PLATFORMS }}\`"
+            echo "Pushed: \`${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}\`"
+            echo ""
+            echo "Point the operator Helm values at it:"
+            echo ""
+            echo '```yaml'
+            echo "manager:"
+            echo "  image:"
+            echo "    repository: ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}"
+            echo "    tag: ${{ inputs.image_tag }}"
+            echo '```'
+            echo ""
+            echo "Remove \`.github/workflows/vsco-publish-opensearch-operator-image.yaml\` before submitting a PR upstream."
+          } >> "$GITHUB_STEP_SUMMARY"

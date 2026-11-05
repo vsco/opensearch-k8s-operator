@@ -1,0 +1,113 @@
+# =============================================================================
+# VSCO FORK ONLY — REMOVE BEFORE OPENING A PR TO opensearch-project/opensearch-k8s-operator
+#
+# Packages charts/opensearch-operator (CRDs included) and pushes:
+#   oci://ghcr.io/vsco/charts/opensearch-operator:<chart_version>
+#
+# shared-infra installs that chart (var.opensearch_operator_version) and still
+# overrides manager.image to ghcr.io/vsco/opensearch-operator:<image_tag>.
+# installCRDs renders files/*.yaml on upgrade, which is how nodePools[].service
+# reaches the cluster. The container image workflow does not publish this chart.
+#
+# Usage:
+#   Actions → "VSCO (fork) publish OpenSearch operator chart to ghcr.io/vsco" → Run workflow
+#
+# Auth: GITHUB_TOKEN usually works for packages:write in the vsco org.
+#       If pushes fail with 403, add repo secret VSCO_GHCR_TOKEN (PAT with
+#       write:packages).
+# =============================================================================
+
+name: VSCO (fork) publish OpenSearch operator chart to ghcr.io/vsco
+
+on:
+  workflow_dispatch:
+    inputs:
+      chart_version:
+        description: 'Helm chart semver (e.g. 3.0.15-vsco1) — no leading v'
+        required: true
+        default: '3.0.15-vsco1'
+      image_tag:
+        description: 'Operator image tag written into the chart (e.g. 3.0.0-vsco1)'
+        required: true
+        default: '3.0.0-vsco1'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  CHART_ORG: vsco
+
+jobs:
+  publish-chart:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.0
+
+      - name: Install yq
+        # Install under RUNNER_TEMP rather than /usr/local/bin, which the self-hosted
+        # runner user cannot write to (curl exit 23).
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -fsSL -X GET "https://github.com/mikefarah/yq/releases/download/v4.44.6/yq_linux_amd64" -o "${RUNNER_TEMP}/bin/yq"
+          chmod +x "${RUNNER_TEMP}/bin/yq"
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
+          "${RUNNER_TEMP}/bin/yq" --version
+
+      - name: Log in to ghcr.io (org vsco packages)
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.VSCO_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Stamp chart and image versions
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.chart_version }}"
+          TAG="${{ inputs.image_tag }}"
+          case "${VERSION}" in
+            *-vsco*) ;;
+            *)
+              echo "chart_version '${VERSION}' must contain '-vsco' (e.g. 3.0.15-vsco1)" >&2
+              exit 1
+              ;;
+          esac
+          chart="charts/opensearch-operator/"
+          yq eval -i ".version = \"${VERSION}\"" "${chart}Chart.yaml"
+          yq eval -i ".appVersion = \"${TAG}\"" "${chart}Chart.yaml"
+          yq eval -i ".manager.image.repository = \"${{ env.REGISTRY }}/${{ env.CHART_ORG }}/opensearch-operator\"" "${chart}values.yaml"
+          yq eval -i ".manager.image.tag = \"${TAG}\"" "${chart}values.yaml"
+          if ! grep -q loadBalancerSourceRanges "${chart}files/opensearch.org_opensearchclusters.yaml"; then
+            echo "Chart CRD is missing nodePools[].service; refusing to publish." >&2
+            exit 1
+          fi
+
+      - name: Package and push chart
+        run: |
+          set -euo pipefail
+          mkdir -p .charts-out
+          helm package charts/opensearch-operator -d .charts-out
+          helm push .charts-out/opensearch-operator-${{ inputs.chart_version }}.tgz \
+            "oci://${{ env.REGISTRY }}/${{ env.CHART_ORG }}/charts"
+          echo "Published oci://${{ env.REGISTRY }}/${{ env.CHART_ORG }}/charts/opensearch-operator:${{ inputs.chart_version }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "## VSCO OpenSearch operator chart"
+            echo ""
+            echo "OCI: \`oci://${{ env.REGISTRY }}/${{ env.CHART_ORG }}/charts/opensearch-operator:${{ inputs.chart_version }}\`"
+            echo "Image default: \`${{ env.REGISTRY }}/${{ env.CHART_ORG }}/opensearch-operator:${{ inputs.image_tag }}\`"
+            echo ""
+            echo "Set \`var.opensearch_operator_version\` to \`${{ inputs.chart_version }}\` in shared-infra."
+            echo "Remove \`.github/workflows/vsco-publish-opensearch-operator-chart.yaml\` before submitting a PR upstream."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -982,6 +982,70 @@ func NewHeadlessServiceForNodePool(cr *opensearchv1.OpenSearchCluster, nodePool 
 	}
 }
 
+// NodePoolServiceName is the name of the optional load-balanced Service of a node pool.
+func NodePoolServiceName(cr *opensearchv1.OpenSearchCluster, nodePool *opensearchv1.NodePool) string {
+	return fmt.Sprintf("%s-%s-http", cr.Spec.General.ServiceName, nodePool.Component)
+}
+
+// NewServiceForNodePool builds the load-balanced HTTP Service for a single node pool. Unlike the
+// headless per-pool Service it has a virtual IP, so clients get one endpoint that spreads
+// requests across the pool's pods. It is only reconciled when nodePool.Service is set.
+func NewServiceForNodePool(cr *opensearchv1.OpenSearchCluster, nodePool *opensearchv1.NodePool) *corev1.Service {
+	labels := map[string]string{
+		helpers.ClusterLabel:  cr.Name,
+		helpers.NodePoolLabel: nodePool.Component,
+	}
+
+	annotations := make(map[string]string)
+	for key, value := range cr.Spec.General.Annotations {
+		annotations[key] = value
+	}
+	for key, value := range nodePool.Annotations {
+		annotations[key] = value
+	}
+
+	appProtocol := "https"
+	if !helpers.IsHttpTlsEnabled(cr) {
+		appProtocol = "http"
+	}
+
+	spec := corev1.ServiceSpec{
+		Ports: []corev1.ServicePort{
+			{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     cr.Spec.General.HttpPort,
+				TargetPort: intstr.IntOrString{
+					IntVal: cr.Spec.General.HttpPort,
+				},
+				AppProtocol: &appProtocol,
+			},
+		},
+		Selector: labels,
+	}
+	if nodePool.Service != nil {
+		for key, value := range nodePool.Service.Annotations {
+			annotations[key] = value
+		}
+		spec.Type = nodePool.Service.Type
+		spec.LoadBalancerSourceRanges = nodePool.Service.LoadBalancerSourceRanges
+	}
+
+	return &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        NodePoolServiceName(cr, nodePool),
+			Namespace:   cr.Namespace,
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Spec: spec,
+	}
+}
+
 func NewServiceForCR(cr *opensearchv1.OpenSearchCluster) *corev1.Service {
 	labels := map[string]string{
 		helpers.ClusterLabel: cr.Name,

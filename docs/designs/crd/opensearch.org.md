@@ -783,8 +783,27 @@ _Appears in:_
 | `pdb` _[PdbConfig](#pdbconfig)_ |  |  |  |
 | `probes` _[ProbesConfig](#probesconfig)_ |  |  |  |
 | `additionalConfig` _object (keys:string, values:string)_ | Extra items to add to the opensearch.yml for this nodepool (merged with general.additionalConfig) |  |  |
+| `service` _[NodePoolServiceSpec](#nodepoolservicespec)_ | Service creates an additional, load-balanced Service for this node pool's HTTP port,<br />named "<general.serviceName>-<component>-http". The per-pool headless Service only<br />provides DNS records for the individual pods, and general.serviceName selects every<br />pool, so this is the way to give clients a single endpoint that spreads requests<br />across just this pool (for example a pool with no roles, which acts as coordinating-only<br />nodes). Leave unset to not create the Service; removing it deletes the Service again. |  |  |
 | `sidecarContainers` _[Container](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#container-v1-core) array_ |  |  | Schemaless: \{\} <br /> |
 | `initContainers` _[Container](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#container-v1-core) array_ |  |  | Schemaless: \{\} <br /> |
+
+
+#### NodePoolServiceSpec
+
+
+
+NodePoolServiceSpec configures the load-balanced Service of a single node pool.
+
+
+
+_Appears in:_
+- [NodePool](#nodepool)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[ServiceType](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#servicetype-v1-core)_ | Type of the Service. Defaults to ClusterIP. | ClusterIP | Enum: [ClusterIP NodePort LoadBalancer] <br /> |
+| `loadBalancerSourceRanges` _string array_ | LoadBalancerSourceRanges restricts the client CIDRs allowed through a Service of type LoadBalancer. |  |  |
+| `annotations` _object (keys:string, values:string)_ | Annotations added to the Service, for example to select an internal cloud load balancer.<br />They are merged over general.annotations and the node pool's annotations. |  |  |
 
 
 #### Notification
